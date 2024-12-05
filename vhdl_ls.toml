@@ -1,0 +1,6 @@
+[libraries]
+
+defaultlib.files = [
+    './*.vhd',
+    'util_comps/*.vhd',
+]

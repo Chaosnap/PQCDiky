@@ -1,0 +1,72 @@
+import random
+import cocotb
+from cocotb.clock import Clock
+from cocotb.runner import get_runner
+from cocotb.triggers import RisingEdge, FallingEdge
+from os import urandom
+
+from kyber import *
+
+TEST_CASES = 100
+
+settings = [(0, 384), (1, 352), (2, 320), (3, 160), (4, 128), (5, 32)]
+
+async def sample_inputs(dut, inputs, mode):
+    dut.dec_mode.value = mode
+    dut.enc_mode.value = mode
+
+    for i in range(0, len(inputs), 8):
+        dut.s_axis_tdata.value = int.from_bytes(inputs[i: i + 8], 'little')
+        dut.s_axis_tvalid.value = 1
+
+        await RisingEdge(dut.clk)
+
+        while dut.s_axis_tready.value != 1:
+            await RisingEdge(dut.clk)
+
+        dut.s_axis_tvalid.value = 0
+
+        for _ in range(random.randint(0, 5)):
+            await RisingEdge(dut.clk)
+
+    dut.s_axis_tdata.value = 0
+    dut.s_axis_tvalid.value = 0
+
+@cocotb.test()
+async def test_decode_encode(dut):
+    clk = Clock(dut.clk, 1, units='us')
+    cocotb.start_soon(clk.start())
+
+    dut.rst.value = 1
+    await RisingEdge(dut.clk)
+    await RisingEdge(dut.clk)
+    dut.rst.value = 0
+
+    for _ in range(TEST_CASES):
+        mode, bytes_len = random.choice(settings)
+        data = urandom(bytes_len)
+
+        cocotb.start_soon(sample_inputs(dut, data, mode))
+
+        await RisingEdge(dut.clk)
+        await RisingEdge(dut.clk)
+
+        dut.m_axis_tready.value = 1
+
+        for i in range(0, len(data), 8):
+            while dut.m_axis_tvalid.value != 1:
+                await RisingEdge(dut.clk)
+
+            assert dut.m_axis_tdata.value.integer.to_bytes(8, 'little') == data[i: i + 8]
+
+            await RisingEdge(dut.clk)
+
+def run_tests():
+    r = get_runner('ghdl')
+    vhdl_sources = ['params_pkg.vhd', 'reduce_pkg.vhd', 'util_comps/math_pkg.vhd', 'decode.vhd', 'encode.vhd', 'test_comps/decode_encode_top.vhd']
+    r.build(vhdl_sources=vhdl_sources, hdl_toplevel='decode_encode_top', always=True, build_args=['--std=08', '-frelaxed', '-fsynopsys'])
+    r.test(hdl_toplevel='decode_encode_top', test_module='decode_encode_tb', test_args=['--std=08', '-frelaxed', '-fsynopsys'])
+    # r.test(hdl_toplevel='decode_encode_top', test_module='decode_encode_tb', test_args=['--std=08', '-frelaxed', '-fsynopsys'], plusargs=['--vcd=test.vcd'])
+
+if __name__ == "__main__":
+    run_tests()
